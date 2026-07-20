@@ -1,0 +1,10 @@
+matplotlib
+numpy
+pandas
+pmdarima
+PyWavelets
+scikit-learn
+scipy
+seaborn
+statsmodels
+xgboost
