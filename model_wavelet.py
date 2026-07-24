@@ -1,95 +1,145 @@
-"""Wavelet decomposition + AutoReg forecasting model."""
+"""Haar decomposition followed by AutoReg on each component."""
+
+from typing import Any
 
 import numpy as np
 import pandas as pd
 import pywt
-from numpy.typing import ArrayLike, NDArray
 from statsmodels.tsa.ar_model import AutoReg
 
-from data_utils import FORECAST_HORIZON, ModelResult, compute_metrics
+from data_utils import (
+    FORECAST_HORIZON,
+    combine_history,
+    compute_metrics,
+    split_series,
+)
+
+
+WAVELET_NAME = "haar"
+WAVELET_LEVEL = 2
+WAVELET_MODE = "periodization"
+AUTOREG_LAG = 12
+COMPONENT_NAMES = ["A2", "D2", "D1"]
 
 
 def reconstruct_component(
-    wavelet_coefficients: list[NDArray[np.float64]],
-    selected_index: int, wavelet_name: str, mode: str, original_length: int,
-) -> NDArray[np.float64]:
-    """Rebuild one component while zeroing every other coefficient array."""
-    component_coefficients: list[NDArray[np.float64]] = []
+    coefficients: list[np.ndarray],
+    selected_index: int,
+    original_length: int,
+) -> np.ndarray:
+    """Reconstruct one component while all other coefficients are zero."""
 
-    for index in range(len(wavelet_coefficients)):
+    selected_coefficients = []
+
+    for index, coefficient in enumerate(coefficients):
         if index == selected_index:
-            component_coefficients.append(wavelet_coefficients[index].copy())
+            selected_coefficients.append(coefficient.copy())
         else:
-            component_coefficients.append(np.zeros_like(wavelet_coefficients[index]))
+            selected_coefficients.append(np.zeros_like(coefficient))
 
-    component = pywt.waverec(component_coefficients, wavelet_name, mode=mode)
+    component = pywt.waverec(
+        selected_coefficients,
+        WAVELET_NAME,
+        mode=WAVELET_MODE,
+    )
 
     return np.asarray(component[:original_length], dtype=float)
 
 
-def forecast_component_autoreg(
-    values: ArrayLike, horizon: int, lag: int
-) -> NDArray[np.float64]:
-    """Forecast one reconstructed component with an autoregression."""
-    model = AutoReg(values, lags=lag, old_names=False)
-    fitted = model.fit()
-    forecast = fitted.forecast(steps=horizon)
+def decompose_history(
+    history: pd.Series,
+) -> tuple[dict[str, np.ndarray], float]:
+    """Decompose the history into the reconstructed A2, D2 and D1 series."""
+
+    values = history.to_numpy(dtype=float).copy()
+    coefficients = pywt.wavedec(
+        values,
+        WAVELET_NAME,
+        mode=WAVELET_MODE,
+        level=WAVELET_LEVEL,
+    )
+
+    components = {}
+
+    for index, component_name in enumerate(COMPONENT_NAMES):
+        components[component_name] = reconstruct_component(
+            coefficients,
+            index,
+            len(values),
+        )
+
+    reconstructed_history = np.zeros(len(values))
+
+    for component_name in COMPONENT_NAMES:
+        reconstructed_history += components[component_name]
+
+    reconstruction_error = float(
+        np.max(np.abs(reconstructed_history - values))
+    )
+
+    return components, reconstruction_error
+
+
+def forecast_component(
+    component: np.ndarray,
+    horizon: int,
+) -> np.ndarray:
+    """Forecast one reconstructed component with AutoReg(12)."""
+
+    model = AutoReg(component, lags=AUTOREG_LAG, old_names=False)
+    fitted_model = model.fit()
+    forecast = fitted_model.forecast(steps=horizon)
 
     return np.asarray(forecast, dtype=float)
 
 
-def run_wavelet_autoreg(series: pd.Series) -> ModelResult:
-    """Decompose the training data and forecast each component."""
-    train = series[:-FORECAST_HORIZON]
-    test = series[-FORECAST_HORIZON:]
+def wavelet_autoreg_forecast(
+    history: pd.Series,
+    horizon: int,
+) -> tuple[np.ndarray, dict[str, np.ndarray], float]:
+    """Forecast every wavelet component and sum their forecasts."""
 
-    wavelet_name = "haar"
-    requested_level = 2
-    mode = "periodization"
+    components, reconstruction_error = decompose_history(history)
+    final_forecast = np.zeros(horizon)
 
-    wavelet = pywt.Wavelet(wavelet_name)
-    maximum_level = pywt.dwt_max_level(len(train), wavelet.dec_len)
-    level = min(requested_level, maximum_level)
+    for component_name in COMPONENT_NAMES:
+        component_forecast = forecast_component(
+            components[component_name],
+            horizon,
+        )
+        final_forecast += component_forecast
 
-    wavelet_coefficients = pywt.wavedec(
-        train.to_numpy(copy=True), wavelet_name, mode=mode, level=level
+    return final_forecast, components, reconstruction_error
+
+
+def forecast_wavelet_one_step(history: pd.Series) -> float:
+    """Produce one forecast for the rolling Diebold-Mariano experiment."""
+
+    forecast, _, _ = wavelet_autoreg_forecast(history, 1)
+
+    return float(forecast[0])
+
+
+def run_wavelet_autoreg(series: pd.Series) -> dict[str, Any]:
+    """Evaluate the fixed Haar level-2 configuration on the final test."""
+
+    train, validation, test = split_series(series)
+    history = combine_history(train, validation)
+    forecast, components, reconstruction_error = (
+        wavelet_autoreg_forecast(history, FORECAST_HORIZON)
     )
 
-    component_names = [f"A{level}"]
-    for detail_level in range(level, 0, -1):
-        component_names.append(f"D{detail_level}")
-
-    components: dict[str, NDArray[np.float64]] = {}
-    for index, component_name in enumerate(component_names):
-        components[component_name] = reconstruct_component(
-            wavelet_coefficients, index, wavelet_name, mode, len(train))
-
-    reconstructed_train = np.zeros(len(train))
-    for component_name in component_names:
-        reconstructed_train += components[component_name]
-
-    reconstruction_error = np.max(np.abs(reconstructed_train - train.values))
-
-    forecast_lag = 12
-    component_forecasts: dict[str, NDArray[np.float64]] = {}
-    forecast = np.zeros(FORECAST_HORIZON)
-
-    for component_name in component_names:
-        component_forecasts[component_name] = forecast_component_autoreg(
-            components[component_name], FORECAST_HORIZON, forecast_lag)
-        forecast += component_forecasts[component_name]
-
     actual = test.to_numpy(dtype=float)
-    metrics = compute_metrics(actual, forecast)
+
+    configuration = (
+        f"{WAVELET_NAME}, level={WAVELET_LEVEL}, "
+        f"mode={WAVELET_MODE}, AutoReg lag={AUTOREG_LAG}"
+    )
 
     return {
-        "forecast": np.asarray(forecast, dtype=float),
-        "actual": actual,
-        "metrics": metrics,
+        "forecast": forecast,
+        "metrics": compute_metrics(actual, forecast, history),
         "components": components,
-        "component_forecasts": component_forecasts,
-        "component_names": component_names,
-        "wavelet_name": wavelet_name,
-        "level": level,
-        "reconstruction_error": float(reconstruction_error),
+        "reconstruction_error": reconstruction_error,
+        "configuration": configuration,
     }

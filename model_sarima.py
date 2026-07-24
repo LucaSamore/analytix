@@ -1,53 +1,111 @@
-"""SARIMA forecasting model."""
+"""SARIMA forecasting with automatic order selection."""
+
+from typing import Any
 
 import numpy as np
-import pmdarima as pm
 import pandas as pd
+import pmdarima as pm
+from pmdarima.arima import ARIMA
 
-from data_utils import FORECAST_HORIZON, ModelResult, compute_metrics
+from data_utils import (
+    FORECAST_HORIZON,
+    SEASONAL_PERIOD,
+    combine_history,
+    compute_metrics,
+    split_series,
+)
 
 
-def run_sarima(series: pd.Series) -> ModelResult:
-    """Fit SARIMA and forecast the final test window."""
-    train = series[:-FORECAST_HORIZON]
-    test = series[-FORECAST_HORIZON:]
+SarimaStructure = tuple[
+    tuple[int, int, int],
+    tuple[int, int, int, int],
+    bool,
+]
 
-    fitted_model = pm.auto_arima(
-        train,
+
+def fit_auto_sarima(history: pd.Series) -> ARIMA:
+    """Select and fit SARIMA using only observations available at that time."""
+
+    return pm.auto_arima(
+        history.to_numpy(dtype=float),
         start_p=1,
         start_q=1,
         test="adf",
         max_p=3,
         max_q=3,
-        m=12,
+        m=SEASONAL_PERIOD,
         start_P=0,
         seasonal=True,
         d=None,
-        D=1,
+        D=None,
+        seasonal_test="ocsb",
+        information_criterion="aicc",
         trace=False,
         error_action="ignore",
         suppress_warnings=True,
         stepwise=True,
     )
-    fitted_model = fitted_model.fit(train)
 
-    fitted_values = np.asarray(fitted_model.predict_in_sample(), dtype=float)
-    forecast, confidence_interval = fitted_model.predict(
-        n_periods=FORECAST_HORIZON,
-        return_conf_int=True,
+
+def select_sarima_structure(history: pd.Series) -> SarimaStructure:
+    """Select the SARIMA orders once before a rolling experiment."""
+
+    model = fit_auto_sarima(history)
+
+    return model.order, model.seasonal_order, bool(model.with_intercept)
+
+
+def sarima_forecast_with_structure(
+    history: pd.Series,
+    horizon: int,
+    structure: SarimaStructure,
+) -> np.ndarray:
+    """Refit a previously selected SARIMA structure and forecast."""
+
+    order, seasonal_order, with_intercept = structure
+
+    model = ARIMA(
+        order=order,
+        seasonal_order=seasonal_order,
+        with_intercept=with_intercept,
+        suppress_warnings=True,
     )
+    fitted_model = model.fit(history.to_numpy(dtype=float))
+    forecast = fitted_model.predict(n_periods=horizon)
+
+    return np.asarray(forecast, dtype=float)
+
+
+def forecast_sarima_one_step(
+    history: pd.Series,
+    structure: SarimaStructure,
+) -> float:
+    """Produce one forecast for the rolling Diebold-Mariano experiment."""
+
+    forecast = sarima_forecast_with_structure(history, 1, structure)
+    return float(forecast[0])
+
+
+def run_sarima(series: pd.Series) -> dict[str, Any]:
+    """Fit SARIMA on pre-test observations and forecast the final year."""
+
+    train, validation, test = split_series(series)
+    history = combine_history(train, validation)
+
+    model = fit_auto_sarima(history)
+    forecast = model.predict(n_periods=FORECAST_HORIZON)
 
     actual = test.to_numpy(dtype=float)
-    predicted = np.asarray(forecast, dtype=float)
-    metrics = compute_metrics(actual, predicted)
+    forecast = np.asarray(forecast, dtype=float)
+
+    configuration = (
+        f"order={model.order}, "
+        f"seasonal_order={model.seasonal_order}"
+    )
 
     return {
-        "forecast": predicted,
-        "actual": actual,
-        "metrics": metrics,
-        "fitted_values": fitted_values,
-        "confidence_interval": np.asarray(confidence_interval, dtype=float),
-        "model_order": fitted_model.order,
-        "seasonal_order": fitted_model.seasonal_order,
-        "fitted_model": fitted_model,
+        "forecast": forecast,
+        "metrics": compute_metrics(actual, forecast, history),
+        "fitted_model": model,
+        "configuration": configuration,
     }

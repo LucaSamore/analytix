@@ -1,133 +1,207 @@
 #!/usr/bin/env python3
-"""Entry point: runs SARIMA, XGBoost and Wavelet+AutoReg sequentially.
-
-Two modes:
-
-  --mode demo   Full step-by-step run (every plot) on ONE series.
-                Example: python main.py --mode demo --dataset M3 --series N1892
-
-  --mode batch  Runs all 10 M3 + 5 M4 series through the three models
-                with no plot pop-ups, then saves two CSV files:
-                  results/results_metrics.csv   (MAE/RMSE/MAPE per series/model)
-                  results/results_dm_test.csv   (Diebold-Mariano test per pair)
-                Example: python main.py --mode batch
-"""
+"""Run the forecasting comparison in demo or batch mode."""
 
 import argparse
-from itertools import combinations
 from pathlib import Path
-from typing import cast
+from typing import Any
 
 import pandas as pd
 
 import data_utils
+import dm_analysis
 import plotting
+from model_baselines import run_autoreg, run_seasonal_naive
 from model_sarima import run_sarima
-from model_xgboost import run_xgboost
 from model_wavelet import run_wavelet_autoreg
+from model_xgboost import run_xgboost
+
 
 OUTPUT_DIR = Path(__file__).resolve().parent / "results"
-MODELS = {
-    "SARIMA": (run_sarima, plotting.plot_sarima),
-    "XGBoost": (run_xgboost, plotting.plot_xgboost),
-    "Wavelet+AutoReg": (run_wavelet_autoreg, plotting.plot_wavelet_autoreg),
-}
 
 
-def _print_metrics(model_name: str, result: data_utils.ModelResult) -> None:
-    metrics: data_utils.Metrics = result["metrics"]
-    print(f"\n{model_name} performance on the test set:")
-    print(f"  MAE  = {metrics['mae']:.3f}")
-    print(f"  RMSE = {metrics['rmse']:.3f}")
-    print(f"  MAPE = {metrics['mape']:.2f}%")
+def run_all_models(
+    series: pd.Series,
+) -> dict[str, dict[str, Any]]:
+    """Run the two references and the three requested models."""
+
+    return {
+        "Seasonal naive": run_seasonal_naive(series),
+        "AutoReg": run_autoreg(series),
+        "SARIMA": run_sarima(series),
+        "XGBoost": run_xgboost(series),
+        "Wavelet+AutoReg": run_wavelet_autoreg(series),
+    }
 
 
-def run_demo(dataset: data_utils.DatasetName, series_id: str) -> None:
-    loader = data_utils.load_m3_series if dataset == "M3" else data_utils.load_m4_series
-    series, metadata = loader(series_id)
-    series_name = str(metadata.iloc[0]).strip()
+def print_metrics(model_name: str, result: dict[str, Any]) -> None:
+    """Print one model's final-test metrics."""
 
-    print(f"Running full demo on {dataset} series {series_name} ({len(series)} observations)")
-    plotting.plot_exploratory_analysis(series, series_name)
+    metrics = result["metrics"]
 
-    for model_name, (run_model, plot_model) in MODELS.items():
-        print(f"\n{'=' * 60}\n{model_name}\n{'=' * 60}")
-        result = run_model(series)
-        _print_metrics(model_name, result)
-        plot_model(series, series_name, result)
+    print(f"\n{model_name}:")
+    print(f"  MAE   = {metrics['mae']:.3f}")
+    print(f"  RMSE  = {metrics['rmse']:.3f}")
+    print(f"  MAPE  = {metrics['mape']:.2f}%")
+    print(f"  sMAPE = {metrics['smape']:.2f}%")
+    print(f"  MASE  = {metrics['mase']:.3f}")
+    print(f"  Configuration: {result['configuration']}")
 
 
-def run_batch() -> None:
-    OUTPUT_DIR.mkdir(exist_ok=True)
-    metrics_rows: list[dict[str, object]] = []
-    dm_rows: list[dict[str, object]] = []
+def run_demo(dataset: str, series_id: str) -> None:
+    """Run and plot every model for one selected series."""
 
-    for dataset, series_id, loader in data_utils.list_series():
-        series, metadata = loader(series_id)
-        series_name = str(metadata.iloc[0]).strip()
-        category = str(metadata.iloc[3]).strip()
+    series, metadata = data_utils.load_series(dataset, series_id)
+    series_name = str(metadata["Series"]).strip()
+    train, validation, test = data_utils.split_series(series)
 
-        print(f"\n=== {dataset} / {series_name} "
-              f"({category}, {len(series)} observations) ===")
+    print(
+        f"Running {dataset} series {series_name} "
+        f"({len(series)} observations)"
+    )
+    print(
+        f"Split: train={len(train)}, validation={len(validation)}, "
+        f"test={len(test)}"
+    )
 
-        results: dict[str, data_utils.ModelResult] = {}
-        for model_name, (run_model, _) in MODELS.items():
-            result = run_model(series)
-            results[model_name] = result
-            _print_metrics(model_name, result)
+    results = run_all_models(series)
 
-            row: dict[str, object] = {
-                "dataset": dataset, "series": series_name,
-                "category": category, "model": model_name,
+    for model_name, result in results.items():
+        print_metrics(model_name, result)
+
+    plotting.plot_series(series, series_name)
+    plotting.plot_wavelet_components(
+        series,
+        series_name,
+        results["Wavelet+AutoReg"],
+    )
+    plotting.plot_forecast_comparison(series, series_name, results)
+    plotting.plot_sarima_diagnostics(results["SARIMA"])
+
+
+def print_batch_summary(metrics: pd.DataFrame) -> None:
+    """Summarise the scale-free metrics across all series."""
+
+    print("\nAverage scale-free metrics across the 15 series:")
+    print(
+        metrics.groupby("model")[["mape", "smape", "mase"]]
+        .mean()
+        .sort_values("mase")
+        .to_string()
+    )
+
+    winner_indices = metrics.groupby(
+        ["dataset", "series"]
+    )["mase"].idxmin()
+
+    print("\nNumber of series won according to MASE:")
+    print(
+        metrics.loc[winner_indices]
+        .groupby("model")
+        .size()
+        .sort_values(ascending=False)
+        .to_string()
+    )
+
+
+def run_batch(run_dm: bool = False) -> None:
+    """Run every selected series and save the result tables."""
+
+    OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
+    metrics_rows = []
+    dm_rows = []
+
+    for dataset, series_id in data_utils.list_series():
+        series, metadata = data_utils.load_series(dataset, series_id)
+        series_name = str(metadata["Series"]).strip()
+        category = str(metadata["Category"]).strip()
+
+        print(
+            f"\n=== {dataset} / {series_name} "
+            f"({category}, {len(series)} observations) ==="
+        )
+
+        results = run_all_models(series)
+
+        for model_name, result in results.items():
+            print_metrics(model_name, result)
+
+            row = {
+                "dataset": dataset,
+                "series": series_name,
+                "category": category,
+                "model": model_name,
+                "configuration": result["configuration"],
             }
             row.update(result["metrics"])
             metrics_rows.append(row)
 
-        for name_a, name_b in combinations(results, 2):
-            result_a = results[name_a]
-            result_b = results[name_b]
-            dm_stat, p_value = data_utils.diebold_mariano_test(
-                result_a["actual"], result_a["forecast"], result_b["forecast"]
+        if run_dm:
+            print(
+                f"\nRunning {data_utils.DM_EVALUATION_POINTS} "
+                "rolling one-step forecasts for DM..."
             )
-            dm_rows.append({
-                "dataset": dataset, "series": series_name, "category": category,
-                "model_a": name_a, "model_b": name_b, "dm_statistic": dm_stat,
-                "p_value": p_value, "significant_5pct": p_value < 0.05,
-            })
+            dm_rows.extend(
+                dm_analysis.run_dm_for_series(
+                    dataset,
+                    series_name,
+                    category,
+                    series,
+                )
+            )
 
-    metrics_df = pd.DataFrame(metrics_rows)
-    dm_df = pd.DataFrame(dm_rows)
-
+    metrics = pd.DataFrame(metrics_rows)
     metrics_path = OUTPUT_DIR / "results_metrics.csv"
-    dm_path = OUTPUT_DIR / "results_dm_test.csv"
-    metrics_df.to_csv(metrics_path, index=False)
-    dm_df.to_csv(dm_path, index=False)
+    metrics.to_csv(metrics_path, index=False)
 
     print(f"\nSaved metrics to {metrics_path}")
-    print(f"Saved Diebold-Mariano results to {dm_path}")
+    print_batch_summary(metrics)
 
-    print("\nAverage metrics per model (across all 15 series):")
-    print(metrics_df.groupby("model")[["mae", "rmse", "mape"]].mean().to_string())
+    if run_dm:
+        dm_results = pd.DataFrame(dm_rows)
+        dm_results = dm_analysis.apply_holm_correction(dm_results)
+        dm_path = OUTPUT_DIR / "results_dm_test.csv"
+        dm_results.to_csv(dm_path, index=False)
 
-    print("\nDiebold-Mariano: share of series with a significant "
-          "difference (p<0.05) per model pair:")
-    print(dm_df.groupby(["model_a", "model_b"])["significant_5pct"].mean().to_string())
+        print(f"\nSaved Diebold-Mariano results to {dm_path}")
+        print("\nDM conclusions after Holm correction:")
+        print(dm_results["conclusion"].value_counts().to_string())
+    else:
+        print(
+            "\nDiebold-Mariano was not run. "
+            "Use --run-dm to include it."
+        )
 
 
 def main() -> None:
-    parser = argparse.ArgumentParser(
-        description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter
+    """Read command-line arguments and start the selected execution."""
+
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument(
+        "--mode",
+        choices=["demo", "batch"],
+        default="batch",
     )
-    parser.add_argument("--mode", choices=["demo", "batch"], default="batch")
-    parser.add_argument("--dataset", choices=["M3", "M4"], default="M3")
-    parser.add_argument("--series", default="N1892", help="Series id for demo mode")
+    parser.add_argument(
+        "--dataset",
+        choices=["M3", "M4"],
+        default="M3",
+    )
+    parser.add_argument(
+        "--series",
+        default="N1830",
+        help="Series identifier used in demo mode.",
+    )
+    parser.add_argument(
+        "--run-dm",
+        action="store_true",
+        help="Run the slower rolling Diebold-Mariano experiment.",
+    )
     args = parser.parse_args()
 
     if args.mode == "demo":
-        dataset = cast(data_utils.DatasetName, args.dataset)
-        run_demo(dataset, args.series)
+        run_demo(args.dataset, args.series)
     else:
-        run_batch()
+        run_batch(run_dm=args.run_dm)
 
 
 if __name__ == "__main__":

@@ -1,32 +1,23 @@
-"""Shared utilities for the M3/M4 forecasting comparison.
-
-Contains: data loading for the M3 and M4 series used in the experiments,
-forecast accuracy metrics, and the Diebold-Mariano test used to check
-whether the differences between models are statistically significant.
-"""
+"""Loading, chronological splits and forecast accuracy measures."""
 
 from pathlib import Path
-from typing import Any, Callable, Literal
 
 import numpy as np
 import pandas as pd
-from numpy.typing import ArrayLike
-from scipy import stats
+
 
 PROJECT_DIR = Path(__file__).resolve().parent
 M3_FILE = PROJECT_DIR / "M3C_monthly.csv"
 M4_FILE = PROJECT_DIR / "M4_monthly_subset.csv"
+
+SEASONAL_PERIOD = 12
 FORECAST_HORIZON = 12
+VALIDATION_HORIZON = 12
+MINIMUM_TRAINING_OBSERVATIONS = 24
+DM_EVALUATION_POINTS = 24
 
-type DatasetName = Literal["M3", "M4"]
-type SeriesData = tuple[pd.Series, pd.Series]
-type SeriesLoader = Callable[[str], SeriesData]
-type SeriesEntry = tuple[DatasetName, str, SeriesLoader]
-type Metrics = dict[str, float]
-type ModelResult = dict[str, Any]
 
-# Picked with a fixed random seed (42), stratified by category, so the sample is
-# reproducible and not cherry-picked.
+# Two series from the four largest M3 categories and one from the other two.
 M3_SERIES_IDS = [
     "N1830", "N1842",   # MICRO
     "N1901", "N2185",   # INDUSTRY
@@ -36,98 +27,207 @@ M3_SERIES_IDS = [
     "N2797",            # OTHER
 ]
 
-# 5 M4 monthly series, one per domain
+# Five long M4 series from five different categories.
 M4_SERIES_IDS = ["M15716", "M27126", "M233", "M43445", "M26707"]
 
 
-def _load_row(data_file: Path, series_id: str) -> SeriesData:
+def _load_row(
+    data_file: Path,
+    series_id: str,
+) -> tuple[pd.Series, pd.Series]:
+    """Load one row and separate its observations from its metadata."""
+
     data = pd.read_csv(data_file)
     data["Series"] = data["Series"].str.strip()
-    row = data.loc[data["Series"] == series_id]
+    matching_rows = data.loc[data["Series"] == series_id]
 
-    if row.empty:
-        raise ValueError(f"Series {series_id!r} not found in {data_file.name}")
+    if matching_rows.empty:
+        raise ValueError(f"Series {series_id!r} not found in {data_file.name}.")
 
-    row = row.iloc[0]
-    series_metadata = row.iloc[:6].copy()
-    series_metadata["Category"] = str(series_metadata["Category"]).strip()
-    series_values = row.iloc[6:].dropna().to_numpy(dtype=float)
-    series = pd.Series(series_values)
+    row = matching_rows.iloc[0]
+    metadata = row.iloc[:6].copy()
+    metadata["Category"] = str(metadata["Category"]).strip()
 
-    return series, series_metadata
+    values = row.iloc[6:].dropna().to_numpy(dtype=float)
+    series = pd.Series(values, dtype=float)
+
+    if int(metadata["N"]) != len(series):
+        raise ValueError(
+            f"Series {series_id!r} declares N={metadata['N']}, "
+            f"but {len(series)} values were loaded."
+        )
+
+    return series, metadata
 
 
-def load_m3_series(series_id: str) -> SeriesData:
+def load_m3_series(series_id: str) -> tuple[pd.Series, pd.Series]:
+    """Load one monthly series from the M3 file."""
+
     return _load_row(M3_FILE, series_id)
 
 
-def load_m4_series(series_id: str) -> SeriesData:
+def load_m4_series(series_id: str) -> tuple[pd.Series, pd.Series]:
+    """Load one monthly series from the M4 file."""
+
     return _load_row(M4_FILE, series_id)
 
 
-def list_series() -> list[SeriesEntry]:
-    entries: list[SeriesEntry] = [
-        ("M3", series_id, load_m3_series) for series_id in M3_SERIES_IDS
-    ]
-    entries += [("M4", sid, load_m4_series) for sid in M4_SERIES_IDS]
-    return entries
+def load_series(
+    dataset: str,
+    series_id: str,
+) -> tuple[pd.Series, pd.Series]:
+    """Load a series from M3 or M4."""
+
+    if dataset == "M3":
+        return load_m3_series(series_id)
+
+    if dataset == "M4":
+        return load_m4_series(series_id)
+
+    raise ValueError("Dataset must be 'M3' or 'M4'.")
 
 
-def compute_metrics(actual: ArrayLike, predicted: ArrayLike) -> Metrics:
+def list_series() -> list[tuple[str, str]]:
+    """Return the dataset and identifier of every selected series."""
+
+    selected_series = []
+
+    for series_id in M3_SERIES_IDS:
+        selected_series.append(("M3", series_id))
+
+    for series_id in M4_SERIES_IDS:
+        selected_series.append(("M4", series_id))
+
+    return selected_series
+
+
+def split_series(
+    series: pd.Series,
+) -> tuple[pd.Series, pd.Series, pd.Series]:
+    """Split a series chronologically into train, validation and test."""
+
+    minimum_length = (
+        MINIMUM_TRAINING_OBSERVATIONS
+        + VALIDATION_HORIZON
+        + FORECAST_HORIZON
+    )
+
+    if len(series) < minimum_length:
+        raise ValueError(
+            f"The series has {len(series)} observations, "
+            f"but at least {minimum_length} are required."
+        )
+
+    test_start = len(series) - FORECAST_HORIZON
+    validation_start = test_start - VALIDATION_HORIZON
+
+    train = series.iloc[:validation_start].reset_index(drop=True)
+    validation = series.iloc[validation_start:test_start].reset_index(drop=True)
+    test = series.iloc[test_start:].reset_index(drop=True)
+
+    return train, validation, test
+
+
+def combine_history(
+    train: pd.Series,
+    validation: pd.Series,
+) -> pd.Series:
+    """Join train and validation before the final model fit."""
+
+    return pd.concat([train, validation], ignore_index=True)
+
+
+def seasonal_naive_forecast(
+    history: pd.Series,
+    horizon: int,
+) -> np.ndarray:
+    """Repeat the observations from the same season of the previous year."""
+
+    if len(history) < SEASONAL_PERIOD:
+        raise ValueError("Seasonal naive needs at least 12 observations.")
+
+    last_year = history.iloc[-SEASONAL_PERIOD:].to_numpy(dtype=float)
+    forecast = []
+
+    for step in range(horizon):
+        forecast.append(last_year[step % SEASONAL_PERIOD])
+
+    return np.asarray(forecast, dtype=float)
+
+
+def mase_scale(history: pd.Series) -> float:
+    """Calculate the mean in-sample error of the seasonal naive method."""
+
+    values = history.to_numpy(dtype=float)
+
+    if len(values) <= SEASONAL_PERIOD:
+        return np.nan
+
+    seasonal_errors = np.abs(
+        values[SEASONAL_PERIOD:] - values[:-SEASONAL_PERIOD]
+    )
+    scale = float(np.mean(seasonal_errors))
+
+    if scale == 0:
+        return np.nan
+
+    return scale
+
+
+def compute_metrics(
+    actual: np.ndarray,
+    predicted: np.ndarray,
+    history: pd.Series,
+) -> dict[str, float]:
+    """Calculate MAE, RMSE, MAPE, sMAPE and MASE."""
+
     actual = np.asarray(actual, dtype=float)
     predicted = np.asarray(predicted, dtype=float)
 
-    mae = float(np.mean(np.abs(actual - predicted)))
-    rmse = float(np.sqrt(np.mean((actual - predicted) ** 2)))
-    mape = float(np.mean(np.abs((actual - predicted) / actual)) * 100)
+    if actual.ndim != 1 or predicted.ndim != 1:
+        raise ValueError("Actual and predicted values must be one-dimensional.")
 
-    return {"mae": mae, "rmse": rmse, "mape": mape}
+    if len(actual) != len(predicted):
+        raise ValueError("Actual and predicted values must have the same length.")
 
+    if len(actual) == 0:
+        raise ValueError("Metric vectors cannot be empty.")
 
-def diebold_mariano_test(
-    actual: ArrayLike, forecast_a: ArrayLike, forecast_b: ArrayLike,
-    h: int = 1, power: int = 2,
-) -> tuple[float, float]:
-    """Diebold-Mariano test comparing the forecast accuracy of two models.
+    if not np.all(np.isfinite(actual)) or not np.all(np.isfinite(predicted)):
+        raise ValueError("Metric vectors must contain only finite values.")
 
-    H0: the two forecasts have equal predictive accuracy (expected loss
-    differential = 0). Returns (dm_statistic, p_value); p < 0.05 means the
-    accuracy difference is unlikely to be due to chance.
+    errors = actual - predicted
+    mae = float(np.mean(np.abs(errors)))
+    rmse = float(np.sqrt(np.mean(errors ** 2)))
 
-    `h` is the forecast horizon and controls how many autocorrelation lags
-    are included in the variance estimate (Harvey, Leybourne & Newbold,
-    1997 small-sample correction). With only FORECAST_HORIZON=12 test
-    points, h=1 (no autocorrelation correction) is the numerically stable
-    default; increase it only if you have longer test windows.
+    non_zero_actual = actual != 0
+    if np.any(non_zero_actual):
+        percentage_errors = np.abs(
+            errors[non_zero_actual] / actual[non_zero_actual]
+        )
+        mape = float(np.mean(percentage_errors) * 100)
+    else:
+        mape = np.nan
 
-    References: Diebold & Mariano (1995); Harvey, Leybourne & Newbold (1997).
-    """
-    actual = np.asarray(actual, dtype=float)
-    forecast_a = np.asarray(forecast_a, dtype=float)
-    forecast_b = np.asarray(forecast_b, dtype=float)
+    smape_sum = 0.0
 
-    loss_a = np.abs(actual - forecast_a) ** power
-    loss_b = np.abs(actual - forecast_b) ** power
-    diff = loss_a - loss_b
+    for index in range(len(actual)):
+        denominator = (
+            abs(actual[index]) + abs(predicted[index])
+        ) / 2
 
-    n = len(diff)
-    mean_diff = np.mean(diff)
+        if denominator != 0:
+            smape_sum += abs(errors[index]) / denominator
 
-    gamma_0 = np.var(diff, ddof=0)
-    variance = gamma_0
-    for lag in range(1, h):
-        gamma_lag = np.mean((diff[lag:] - mean_diff) * (diff[:-lag] - mean_diff))
-        variance += 2 * gamma_lag
-    variance /= n
+    smape = float(smape_sum / len(actual) * 100)
 
-    if variance <= 0:
-        return 0.0, 1.0
+    scale = mase_scale(history)
+    mase = float(mae / scale) if np.isfinite(scale) else np.nan
 
-    dm_stat = mean_diff / np.sqrt(variance)
-
-    correction = np.sqrt((n + 1 - 2 * h + h * (h - 1) / n) / n)
-    dm_stat *= correction
-
-    p_value = 2 * (1 - stats.t.cdf(np.abs(dm_stat), df=n - 1))
-
-    return float(dm_stat), float(p_value)
+    return {
+        "mae": mae,
+        "rmse": rmse,
+        "mape": mape,
+        "smape": smape,
+        "mase": mase,
+    }
