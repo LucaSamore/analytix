@@ -3,11 +3,11 @@
 This project compares forecasting methods for monthly time series from the
 M3 and M4 datasets.
 
-The three main methods used in this project are:
+The three main methods requested for the project are:
 
-- SARIMA;
-- XGBoost with 12 lagged values;
-- Haar wavelet decomposition followed by AutoReg(12).
+- SARIMA
+- XGBoost
+- Wavelet decomposition followed by AutoReg
 
 Two simple reference models are also included:
 
@@ -48,12 +48,12 @@ run.
 
 The experiment uses ten monthly M3 series:
 
-- 2 MICRO series;
-- 2 INDUSTRY series;
-- 2 MACRO series;
-- 2 FINANCE series;
-- 1 DEMOGRAPHIC series;
-- 1 OTHER series.
+- 2 MICRO series
+- 2 INDUSTRY series
+- 2 MACRO series
+- 2 FINANCE series
+- 1 DEMOGRAPHIC series
+- 1 OTHER series
 
 It also uses five longer monthly M4 series from the MICRO, INDUSTRY, MACRO,
 FINANCE and DEMOGRAPHIC categories.
@@ -150,11 +150,11 @@ the forecast. Future test values are never included in the decomposition.
 
 The following measures are calculated for every model:
 
-- MAE;
-- RMSE;
-- MAPE;
-- sMAPE;
-- MASE.
+- MAE
+- RMSE
+- MAPE
+- sMAPE
+- MASE
 
 MAE and RMSE depend on the scale of each series. sMAPE and MASE are therefore
 the main measures used to compare average performance across different
@@ -196,8 +196,8 @@ experiment.
 
 Wavelet+AutoReg is compared with:
 
-- SARIMA;
-- XGBoost.
+- SARIMA
+- XGBoost
 
 This produces 30 comparisons: 15 series multiplied by 2 reference models.
 The resulting p-values are adjusted together with the Holm method.
@@ -213,9 +213,9 @@ proof.
 
 In `results_dm_test.csv`:
 
-- a negative DM statistic favours Wavelet+AutoReg;
-- a positive DM statistic favours the model in the `model_b` column;
-- a non-significant result does not prove that the models are identical.
+- a negative DM statistic favours Wavelet+AutoReg
+- a positive DM statistic favours the model in the `model_b` column
+- a non-significant result does not prove that the models are identical
 
 ## Requirements
 
@@ -306,39 +306,180 @@ sudo dnf install libgomp
 
 ## Running the project
 
-Run all commands from the project directory with the virtual environment
-activated.
+All executions start from a terminal opened in the project directory. The
+virtual environment created during installation must be active.
 
-### Demonstration on one series
+On Windows PowerShell:
 
-```bash
-python main.py --mode demo --dataset M3 --series N1830
+```powershell
+cd "C:\path\to\analytix"
+.\.venv\Scripts\Activate.ps1
 ```
 
-The demo prints all model configurations and metrics, then displays:
-
-- the complete observed series;
-- the Haar wavelet components;
-- the five forecast paths;
-- the SARIMA diagnostic plots.
-
-An M4 series can be selected in the same way:
+On macOS or Linux:
 
 ```bash
-python main.py --mode demo --dataset M4 --series M15716
+cd /path/to/analytix
+source .venv/bin/activate
 ```
 
-### Complete batch experiment
+After activation, the commands are the same on every operating system and
+have this general form:
+
+```text
+python main.py [--mode {demo,batch}] [--dataset {M3,M4}]
+               [--series SERIES_ID] [--run-dm]
+```
+
+The available arguments are:
+
+| Argument | Meaning | Default |
+|---|---|---|
+| `--mode demo` | Run all models and show plots for one series | |
+| `--mode batch` | Run all models on the 15 selected series | `batch` |
+| `--dataset M3` | Select the M3 dataset in demo mode | `M3` |
+| `--dataset M4` | Select the M4 dataset in demo mode | |
+| `--series ID` | Select the series identifier in demo mode | `N1830` |
+| `--run-dm` | Add the rolling DM experiment to batch mode | disabled |
+
+`--dataset` and `--series` are used only in demo mode. Batch mode always runs
+the 10 predefined M3 series and the 5 predefined M4 series.
+
+### Available series for demo mode
+
+The identifiers are case-sensitive and must be written exactly as shown.
+
+| Dataset | Category | Series identifiers |
+|---|---|---|
+| M3 | Micro | `N1830`, `N1842` |
+| M3 | Industry | `N1901`, `N2185` |
+| M3 | Macro | `N2438`, `N2219` |
+| M3 | Finance | `N2591`, `N2662` |
+| M3 | Demographic | `N2745` |
+| M3 | Other | `N2797` |
+| M4 | Micro | `M15716` |
+| M4 | Industry | `M27126` |
+| M4 | Macro | `M233` |
+| M4 | Finance | `M43445` |
+| M4 | Demographic | `M26707` |
+
+### General quick start
+
+Running the program without arguments starts the standard batch experiment:
+
+```bash
+python main.py
+```
+
+This is equivalent to:
 
 ```bash
 python main.py --mode batch
 ```
 
-This runs the five models on all 15 series and writes:
+It runs the five models on all 15 series and calculates the final 12-month
+forecast metrics. It does not run the slower Diebold-Mariano experiment.
+
+### Demo examples with M3 series
+
+Run the default M3 Micro series:
+
+```bash
+python main.py --mode demo --dataset M3 --series N1830
+```
+
+Run an M3 Industry series:
+
+```bash
+python main.py --mode demo --dataset M3 --series N1901
+```
+
+Run an M3 Macro series:
+
+```bash
+python main.py --mode demo --dataset M3 --series N2438
+```
+
+Run an M3 Finance series:
+
+```bash
+python main.py --mode demo --dataset M3 --series N2591
+```
+
+Run the M3 Demographic series:
+
+```bash
+python main.py --mode demo --dataset M3 --series N2745
+```
+
+Run the M3 Other series:
+
+```bash
+python main.py --mode demo --dataset M3 --series N2797
+```
+
+The demo prints all model configurations and metrics, then displays:
+
+- the complete observed series
+- the Haar wavelet components
+- the five forecast paths
+- the SARIMA diagnostic plots
+
+Close the plot windows to allow the program to finish.
+
+### Demo examples with M4 series
+
+Run an M4 Micro series:
+
+```bash
+python main.py --mode demo --dataset M4 --series M15716
+```
+
+Run an M4 Macro series:
+
+```bash
+python main.py --mode demo --dataset M4 --series M233
+```
+
+Run an M4 Demographic series:
+
+```bash
+python main.py --mode demo --dataset M4 --series M26707
+```
+
+Run an M4 Industry series:
+
+```bash
+python main.py --mode demo --dataset M4 --series M27126
+```
+
+Run an M4 Finance series:
+
+```bash
+python main.py --mode demo --dataset M4 --series M43445
+```
+
+### Complete batch experiment without the DM test
+
+```bash
+python main.py --mode batch
+```
+
+This runs:
+
+- 5 forecasting models;
+- 10 M3 series;
+- 5 M4 series;
+- 75 final model evaluations in total.
+
+The metrics are printed in the terminal and written to:
 
 ```text
 results/results_metrics.csv
 ```
+
+This mode is useful when the forecasting models or metrics have changed but
+the statistical comparison does not need to be recalculated.
 
 ### Complete batch experiment with the DM test
 
@@ -346,7 +487,11 @@ results/results_metrics.csv
 python main.py --mode batch --run-dm
 ```
 
-This also performs the rolling one-step forecasts and writes:
+This first runs the standard batch experiment and then generates 24 rolling
+one-step forecasts for each series. Wavelet+AutoReg is compared with SARIMA
+and XGBoost, producing 30 DM comparisons.
+
+The command writes:
 
 ```text
 results/results_metrics.csv
@@ -356,11 +501,40 @@ results/results_dm_test.csv
 The DM experiment is considerably slower because SARIMA, XGBoost and the
 wavelet model must be fitted repeatedly at every rolling origin.
 
+Running a batch command again replaces the corresponding CSV results with
+the results of the new execution.
+
+### Running without graphical output
+
+The `batch` modes do not open plot windows, so they are the appropriate
+choice for a remote machine or a server without a graphical desktop:
+
+```bash
+python main.py --mode batch
+```
+
+The `demo` mode is intended for a computer with a graphical desktop because
+it displays the Matplotlib figures interactively.
+
 ### Command-line help
 
 ```bash
 python main.py --help
 ```
+
+Use this command to see the accepted arguments directly from the program.
+
+### Common execution problems
+
+- `ModuleNotFoundError`: activate `.venv` and run
+  `python -m pip install -r requirements.txt`.
+- `FileNotFoundError` for an M3 or M4 CSV: place both dataset files in the
+  same directory as `data_utils.py`.
+- `Series ... not found`: check the dataset and use one of the exact
+  identifiers listed above.
+- No plots appear: use demo mode on a machine with a graphical desktop.
+- DM execution takes a long time: this is expected because the models are
+  fitted repeatedly for the rolling forecasts.
 
 ### Leaving the virtual environment
 
