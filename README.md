@@ -11,15 +11,19 @@ This project compares three forecasting approaches on multiple time series from 
 ```text
 m3_forecast_project/
 ├── data_utils.py          # data loading, metrics, Diebold-Mariano test
-├── model_sarima.py        # SARIMA model
-├── model_xgboost.py       # XGBoost model
-├── model_wavelet.py       # Wavelet + AutoReg model
-├── main.py                # entry point (demo / batch modes)
-├── M3C_monthly.csv         # M3 monthly dataset
+├── model_sarima.py        # SARIMA computation
+├── model_xgboost.py       # XGBoost computation
+├── model_wavelet.py       # Wavelet + AutoReg computation
+├── plotting.py            # EDA and model-result plots
+├── main.py                # entry point and orchestration
+├── M3C_monthly.csv        # M3 monthly dataset
 ├── M4_monthly_subset.csv  # 5 longer M4 monthly series (see below)
 ├── README.md
 └── requirements.txt
 ```
+
+The model modules only fit and forecast. `plotting.py` handles figures,
+while `main.py` coordinates demo and batch execution.
 
 ## Data
 
@@ -106,3 +110,5 @@ python main.py --mode batch
 ```
 
 This can take several minutes (SARIMA's stepwise search is the slowest step, especially on the longer M4 series). Progress and per-series metrics are printed to the terminal as it runs; a summary (average metrics per model, share of series with a significant DM difference per model pair) is printed at the end.
+
+## Authors

@@ -6,17 +6,24 @@ whether the differences between models are statistically significant.
 """
 
 from pathlib import Path
+from typing import Any, Callable, Literal
 
 import numpy as np
 import pandas as pd
+from numpy.typing import ArrayLike
 from scipy import stats
-
 
 PROJECT_DIR = Path(__file__).resolve().parent
 M3_FILE = PROJECT_DIR / "M3C_monthly.csv"
 M4_FILE = PROJECT_DIR / "M4_monthly_subset.csv"
-
 FORECAST_HORIZON = 12
+
+type DatasetName = Literal["M3", "M4"]
+type SeriesData = tuple[pd.Series, pd.Series]
+type SeriesLoader = Callable[[str], SeriesData]
+type SeriesEntry = tuple[DatasetName, str, SeriesLoader]
+type Metrics = dict[str, float]
+type ModelResult = dict[str, Any]
 
 # Picked with a fixed random seed (42), stratified by category, so the sample is
 # reproducible and not cherry-picked.
@@ -33,7 +40,7 @@ M3_SERIES_IDS = [
 M4_SERIES_IDS = ["M15716", "M27126", "M233", "M43445", "M26707"]
 
 
-def _load_row(data_file, series_id):
+def _load_row(data_file: Path, series_id: str) -> SeriesData:
     data = pd.read_csv(data_file)
     data["Series"] = data["Series"].str.strip()
     row = data.loc[data["Series"] == series_id]
@@ -50,21 +57,23 @@ def _load_row(data_file, series_id):
     return series, series_metadata
 
 
-def load_m3_series(series_id):
+def load_m3_series(series_id: str) -> SeriesData:
     return _load_row(M3_FILE, series_id)
 
 
-def load_m4_series(series_id):
+def load_m4_series(series_id: str) -> SeriesData:
     return _load_row(M4_FILE, series_id)
 
 
-def list_series():
-    entries = [("M3", sid, load_m3_series) for sid in M3_SERIES_IDS]
+def list_series() -> list[SeriesEntry]:
+    entries: list[SeriesEntry] = [
+        ("M3", series_id, load_m3_series) for series_id in M3_SERIES_IDS
+    ]
     entries += [("M4", sid, load_m4_series) for sid in M4_SERIES_IDS]
     return entries
 
 
-def compute_metrics(actual, predicted):
+def compute_metrics(actual: ArrayLike, predicted: ArrayLike) -> Metrics:
     actual = np.asarray(actual, dtype=float)
     predicted = np.asarray(predicted, dtype=float)
 
@@ -75,7 +84,10 @@ def compute_metrics(actual, predicted):
     return {"mae": mae, "rmse": rmse, "mape": mape}
 
 
-def diebold_mariano_test(actual, forecast_a, forecast_b, h=1, power=2):
+def diebold_mariano_test(
+    actual: ArrayLike, forecast_a: ArrayLike, forecast_b: ArrayLike,
+    h: int = 1, power: int = 2,
+) -> tuple[float, float]:
     """Diebold-Mariano test comparing the forecast accuracy of two models.
 
     H0: the two forecasts have equal predictive accuracy (expected loss
@@ -104,9 +116,7 @@ def diebold_mariano_test(actual, forecast_a, forecast_b, h=1, power=2):
     gamma_0 = np.var(diff, ddof=0)
     variance = gamma_0
     for lag in range(1, h):
-        gamma_lag = np.mean(
-            (diff[lag:] - mean_diff) * (diff[:-lag] - mean_diff)
-        )
+        gamma_lag = np.mean((diff[lag:] - mean_diff) * (diff[:-lag] - mean_diff))
         variance += 2 * gamma_lag
     variance /= n
 
@@ -121,35 +131,3 @@ def diebold_mariano_test(actual, forecast_a, forecast_b, h=1, power=2):
     p_value = 2 * (1 - stats.t.cdf(np.abs(dm_stat), df=n - 1))
 
     return float(dm_stat), float(p_value)
-
-
-def show_exploratory_analysis(series, series_name):
-    """Optional EDA plots (line, histogram, boxplot, seasonal decomposition).
-    Only meant for the single-series demo, not for the batch run."""
-    import matplotlib.pyplot as plt
-    import seaborn as sns
-    from statsmodels.tsa.seasonal import seasonal_decompose
-
-    sns.set_theme(style="darkgrid", context="talk", palette="deep")
-
-    fig, axes = plt.subplots(3, 1, figsize=(8, 16))
-
-    sns.lineplot(x=range(len(series)), y=series, ax=axes[0])
-    axes[0].set(title=f"Series {series_name}", xlabel="Observation", ylabel="Value")
-
-    sns.histplot(series, kde=True, ax=axes[1])
-    axes[1].set(title="Distribution", xlabel="Value", ylabel="Count")
-
-    sns.boxplot(y=series, ax=axes[2])
-    sns.stripplot(y=series, ax=axes[2], color=".25", alpha=0.4, size=3)
-    axes[2].set(title="Boxplot", ylabel="Value")
-
-    sns.despine()
-    plt.tight_layout()
-    plt.show()
-
-    decomposition = seasonal_decompose(series, model="additive", period=12)
-    figure = decomposition.plot()
-    figure.set_size_inches(8, 6)
-    plt.suptitle("Additive decomposition")
-    plt.show()

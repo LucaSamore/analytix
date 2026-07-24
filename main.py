@@ -14,80 +14,86 @@ Two modes:
 """
 
 import argparse
+from itertools import combinations
 from pathlib import Path
+from typing import cast
 
 import pandas as pd
 
 import data_utils
+import plotting
 from model_sarima import run_sarima
 from model_xgboost import run_xgboost
 from model_wavelet import run_wavelet_autoreg
 
 OUTPUT_DIR = Path(__file__).resolve().parent / "results"
-
 MODELS = {
-    "SARIMA": run_sarima,
-    "XGBoost": run_xgboost,
-    "Wavelet+AutoReg": run_wavelet_autoreg,
+    "SARIMA": (run_sarima, plotting.plot_sarima),
+    "XGBoost": (run_xgboost, plotting.plot_xgboost),
+    "Wavelet+AutoReg": (run_wavelet_autoreg, plotting.plot_wavelet_autoreg),
 }
 
 
-def run_demo(dataset, series_id):
+def _print_metrics(model_name: str, result: data_utils.ModelResult) -> None:
+    metrics: data_utils.Metrics = result["metrics"]
+    print(f"\n{model_name} performance on the test set:")
+    print(f"  MAE  = {metrics['mae']:.3f}")
+    print(f"  RMSE = {metrics['rmse']:.3f}")
+    print(f"  MAPE = {metrics['mape']:.2f}%")
+
+
+def run_demo(dataset: data_utils.DatasetName, series_id: str) -> None:
     loader = data_utils.load_m3_series if dataset == "M3" else data_utils.load_m4_series
     series, metadata = loader(series_id)
-    series_name = metadata.iloc[0]
+    series_name = str(metadata.iloc[0]).strip()
 
-    print(f"Running full demo on {dataset} series {series_name} "
-          f"({len(series)} observations)")
+    print(f"Running full demo on {dataset} series {series_name} ({len(series)} observations)")
+    plotting.plot_exploratory_analysis(series, series_name)
 
-    data_utils.show_exploratory_analysis(series, series_name)
-
-    for model_name, run_model in MODELS.items():
+    for model_name, (run_model, plot_model) in MODELS.items():
         print(f"\n{'=' * 60}\n{model_name}\n{'=' * 60}")
-        result = run_model(series, series_name, show_plots=True)
-        print(f"\n{model_name} metrics: {result['metrics']}")
+        result = run_model(series)
+        _print_metrics(model_name, result)
+        plot_model(series, series_name, result)
 
 
-def run_batch():
+def run_batch() -> None:
     OUTPUT_DIR.mkdir(exist_ok=True)
-    metrics_rows = []
-    dm_rows = []
+    metrics_rows: list[dict[str, object]] = []
+    dm_rows: list[dict[str, object]] = []
 
     for dataset, series_id, loader in data_utils.list_series():
         series, metadata = loader(series_id)
-        series_name = metadata.iloc[0]
+        series_name = str(metadata.iloc[0]).strip()
         category = str(metadata.iloc[3]).strip()
 
-        print(f"\n=== {dataset} / {series_name} ({category}, "
-              f"{len(series)} observations) ===")
+        print(f"\n=== {dataset} / {series_name} "
+              f"({category}, {len(series)} observations) ===")
 
-        results = {}
-        for model_name, run_model in MODELS.items():
-            results[model_name] = run_model(series, series_name, show_plots=False)
+        results: dict[str, data_utils.ModelResult] = {}
+        for model_name, (run_model, _) in MODELS.items():
+            result = run_model(series)
+            results[model_name] = result
+            _print_metrics(model_name, result)
 
-            row = {"dataset": dataset, "series": series_name, "category": category, "model": model_name}
-            row.update(results[model_name]["metrics"])
+            row: dict[str, object] = {
+                "dataset": dataset, "series": series_name,
+                "category": category, "model": model_name,
+            }
+            row.update(result["metrics"])
             metrics_rows.append(row)
 
-        model_names = list(results.keys())
-        for i in range(len(model_names)):
-            for j in range(i + 1, len(model_names)):
-                name_a, name_b = model_names[i], model_names[j]
-                dm_stat, p_value = data_utils.diebold_mariano_test(
-                    results[name_a]["actual"],
-                    results[name_a]["forecast"],
-                    results[name_b]["forecast"],
-                )
-                dm_rows.append({
-                    "dataset": dataset,
-                    "series": series_name,
-                    "category": category,
-                    "model_a": name_a,
-                    "model_b": name_b,
-                    "dm_statistic": dm_stat,
-                    "p_value": p_value,
-                    "significant_5pct": p_value < 0.05,
-                })
+        for name_a, name_b in combinations(results, 2):
+            result_a = results[name_a]
+            result_b = results[name_b]
+            dm_stat, p_value = data_utils.diebold_mariano_test(
+                result_a["actual"], result_a["forecast"], result_b["forecast"]
+            )
+            dm_rows.append({
+                "dataset": dataset, "series": series_name, "category": category,
+                "model_a": name_a, "model_b": name_b, "dm_statistic": dm_stat,
+                "p_value": p_value, "significant_5pct": p_value < 0.05,
+            })
 
     metrics_df = pd.DataFrame(metrics_rows)
     dm_df = pd.DataFrame(dm_rows)
@@ -108,15 +114,18 @@ def run_batch():
     print(dm_df.groupby(["model_a", "model_b"])["significant_5pct"].mean().to_string())
 
 
-def main():
-    parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
+def main() -> None:
+    parser = argparse.ArgumentParser(
+        description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter
+    )
     parser.add_argument("--mode", choices=["demo", "batch"], default="batch")
-    parser.add_argument("--dataset", choices=["M3", "M4"], default="M3", help="Dataset for demo mode")
+    parser.add_argument("--dataset", choices=["M3", "M4"], default="M3")
     parser.add_argument("--series", default="N1892", help="Series id for demo mode")
     args = parser.parse_args()
 
     if args.mode == "demo":
-        run_demo(args.dataset, args.series)
+        dataset = cast(data_utils.DatasetName, args.dataset)
+        run_demo(dataset, args.series)
     else:
         run_batch()
 
