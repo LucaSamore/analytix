@@ -1,4 +1,4 @@
-# Samore/Castellucci's Forecasting Project
+# Operational Analytics Project
 
 This project compares three forecasting approaches on multiple time series from the M3 and M4 competitions:
 
