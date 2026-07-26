@@ -4,10 +4,9 @@ from typing import Any
 
 import numpy as np
 import pandas as pd
-from dieboldmariano import dm_test
-from statsmodels.stats.multitest import multipletests
 
 import data_utils
+from dm_test import dm_test
 from model_sarima import (
     forecast_sarima_one_step,
     select_sarima_structure,
@@ -81,13 +80,12 @@ def compare_wavelet_with_models(
             dtype=float,
         )
 
-        statistic, p_value = dm_test(
+        dm_result = dm_test(
             actual.tolist(),
             wavelet_forecast.tolist(),
             other_forecast.tolist(),
             h=1,
-            one_sided=False,
-            harvey_correction=True,
+            crit="MSE",
         )
 
         wavelet_mse = float(
@@ -104,15 +102,26 @@ def compare_wavelet_with_models(
         else:
             lower_loss_model = "Tie"
 
+        is_significant = bool(dm_result.p_value < 0.05)
+
+        if is_significant:
+            conclusion = (
+                f"{lower_loss_model} significantly better"
+            )
+        else:
+            conclusion = "No significant difference"
+
         rows.append({
             "dataset": dataset,
             "series": series_name,
             "category": category,
             "model_a": WAVELET_MODEL,
             "model_b": other_model,
-            "dm_statistic": float(statistic),
-            "raw_p_value": float(p_value),
+            "dm_statistic": float(dm_result.DM),
+            "p_value": float(dm_result.p_value),
+            "significant_5pct": is_significant,
             "lower_average_loss": lower_loss_model,
+            "conclusion": conclusion,
         })
 
     return rows
@@ -135,29 +144,3 @@ def run_dm_for_series(
         actual,
         forecasts,
     )
-
-
-def apply_holm_correction(results: pd.DataFrame) -> pd.DataFrame:
-    """Adjust the 30 DM p-values for multiple comparisons."""
-
-    rejected, adjusted_p_values, _, _ = multipletests(
-        results["raw_p_value"],
-        alpha=0.05,
-        method="holm",
-    )
-
-    results["adjusted_p_value"] = adjusted_p_values
-    results["significant_holm_5pct"] = rejected
-    conclusions = []
-
-    for index, row in results.iterrows():
-        if results.loc[index, "significant_holm_5pct"]:
-            conclusions.append(
-                f"{row['lower_average_loss']} significantly better"
-            )
-        else:
-            conclusions.append("No significant difference")
-
-    results["conclusion"] = conclusions
-
-    return results

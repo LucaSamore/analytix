@@ -25,6 +25,7 @@ forecasting model on the original series.
 analytix/
 ├── data_utils.py
 ├── dm_analysis.py
+├── dm_test.py
 ├── model_baselines.py
 ├── model_sarima.py
 ├── model_xgboost.py
@@ -66,7 +67,7 @@ Every series is divided without changing its temporal order:
 
 ```text
 |--------------- training ---------------|-- validation --|---- test ----|
-                                                    12 months      12 months
+                                              12 months       12 months
 ```
 
 The final 12 observations are used only as the test set. They are not used
@@ -165,15 +166,17 @@ error of the seasonal naive reference.
 
 ## Diebold-Mariano test
 
-The Diebold-Mariano test is not implemented manually. The project uses the
-`dm_test` function from the `dieboldmariano` package.
+The project uses the local `dm_test.py` script supplied with the course
+materials instead of the external `dieboldmariano` package. The script is
+included unchanged.
 
 The test uses:
 
 - squared loss;
 - a two-sided alternative;
 - forecast horizon `h=1`;
-- the Harvey-Leybourne-Newbold correction for small samples.
+- the Harvey-Leybourne-Newbold correction already implemented inside the
+  supplied script.
 
 The test requires a sequence of comparable forecast errors. The 12 errors
 from one multi-step forecast are not used directly because they refer to
@@ -200,7 +203,8 @@ Wavelet+AutoReg is compared with:
 - XGBoost
 
 This produces 30 comparisons: 15 series multiplied by 2 reference models.
-The resulting p-values are adjusted together with the Holm method.
+Each p-value is interpreted individually at the 5% significance level. No
+additional multiple-comparison correction, such as Holm, is applied.
 
 The final 12-month accuracy measures and the rolling one-step DM test answer
 different questions. The first evaluates a complete one-year forecast. The
@@ -209,12 +213,15 @@ consistent across rolling origins.
 
 Even with 24 origins, the statistical sample is small. DM results should
 therefore be interpreted as exploratory evidence rather than definitive
-proof.
+proof. Moreover, interpreting 30 unadjusted tests increases the probability
+of finding at least one apparently significant result by chance.
 
 In `results_dm_test.csv`:
 
 - a negative DM statistic favours Wavelet+AutoReg
 - a positive DM statistic favours the model in the `model_b` column
+- `p_value` is the unadjusted p-value returned by the supplied script
+- `significant_5pct` reports whether that p-value is below 0.05
 - a non-significant result does not prove that the models are identical
 
 ## Requirements
@@ -563,11 +570,10 @@ Wavelet+AutoReg has a mean MASE below 1 and wins one of the 15 series. The
 result suggests that the fixed Haar decomposition is useful for some series
 but does not provide a systematic improvement over the simpler models.
 
-After applying the Holm correction to all 30 DM comparisons, only the
-Wavelet+AutoReg versus XGBoost comparison for M3 series N2797 is
-statistically significant. It favours XGBoost. The other 29 comparisons do
-not provide sufficient evidence of a difference in expected forecast
-accuracy.
+Using the 30 unadjusted p-values individually, 11 comparisons are significant
+at the nominal 5% level. Ten favour the competing model and one favours
+Wavelet+AutoReg. These results must be treated as exploratory because no
+multiple-comparison correction is applied.
 
 ## Interpretation
 

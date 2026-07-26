@@ -158,12 +158,11 @@ def run_batch(run_dm: bool = False) -> None:
 
     if run_dm:
         dm_results = pd.DataFrame(dm_rows)
-        dm_results = dm_analysis.apply_holm_correction(dm_results)
         dm_path = OUTPUT_DIR / "results_dm_test.csv"
         dm_results.to_csv(dm_path, index=False)
 
         print(f"\nSaved Diebold-Mariano results to {dm_path}")
-        print("\nDM conclusions after Holm correction:")
+        print("\nDM conclusions:")
         print(dm_results["conclusion"].value_counts().to_string())
     else:
         print(
