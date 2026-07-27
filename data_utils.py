@@ -31,6 +31,33 @@ M3_SERIES_IDS = [
 M4_SERIES_IDS = ["M15716", "M27126", "M233", "M43445", "M26707"]
 
 
+def load_series(
+    dataset: str,
+    series_id: str,
+) -> tuple[pd.Series, pd.Series]:
+    """Load a series from M3 or M4."""
+
+    if dataset == "M3":
+        return _load_m3_series(series_id)
+
+    if dataset == "M4":
+        return _load_m4_series(series_id)
+
+    raise ValueError("Dataset must be 'M3' or 'M4'.")
+
+
+def _load_m3_series(series_id: str) -> tuple[pd.Series, pd.Series]:
+    """Load one monthly series from the M3 file."""
+
+    return _load_row(M3_FILE, series_id)
+
+
+def _load_m4_series(series_id: str) -> tuple[pd.Series, pd.Series]:
+    """Load one monthly series from the M4 file."""
+
+    return _load_row(M4_FILE, series_id)
+
+
 def _load_row(
     data_file: Path,
     series_id: str,
@@ -58,33 +85,6 @@ def _load_row(
         )
 
     return series, metadata
-
-
-def load_m3_series(series_id: str) -> tuple[pd.Series, pd.Series]:
-    """Load one monthly series from the M3 file."""
-
-    return _load_row(M3_FILE, series_id)
-
-
-def load_m4_series(series_id: str) -> tuple[pd.Series, pd.Series]:
-    """Load one monthly series from the M4 file."""
-
-    return _load_row(M4_FILE, series_id)
-
-
-def load_series(
-    dataset: str,
-    series_id: str,
-) -> tuple[pd.Series, pd.Series]:
-    """Load a series from M3 or M4."""
-
-    if dataset == "M3":
-        return load_m3_series(series_id)
-
-    if dataset == "M4":
-        return load_m4_series(series_id)
-
-    raise ValueError("Dataset must be 'M3' or 'M4'.")
 
 
 def list_series() -> list[tuple[str, str]]:
@@ -155,25 +155,6 @@ def seasonal_naive_forecast(
     return np.asarray(forecast, dtype=float)
 
 
-def mase_scale(history: pd.Series) -> float:
-    """Calculate the mean in-sample error of the seasonal naive method."""
-
-    values = history.to_numpy(dtype=float)
-
-    if len(values) <= SEASONAL_PERIOD:
-        return np.nan
-
-    seasonal_errors = np.abs(
-        values[SEASONAL_PERIOD:] - values[:-SEASONAL_PERIOD]
-    )
-    scale = float(np.mean(seasonal_errors))
-
-    if scale == 0:
-        return np.nan
-
-    return scale
-
-
 def compute_metrics(
     actual: np.ndarray,
     predicted: np.ndarray,
@@ -221,7 +202,7 @@ def compute_metrics(
 
     smape = float(smape_sum / len(actual) * 100)
 
-    scale = mase_scale(history)
+    scale = _mase_scale(history)
     mase = float(mae / scale) if np.isfinite(scale) else np.nan
 
     return {
@@ -231,3 +212,22 @@ def compute_metrics(
         "smape": smape,
         "mase": mase,
     }
+
+
+def _mase_scale(history: pd.Series) -> float:
+    """Calculate the mean in-sample error of the seasonal naive method."""
+
+    values = history.to_numpy(dtype=float)
+
+    if len(values) <= SEASONAL_PERIOD:
+        return np.nan
+
+    seasonal_errors = np.abs(
+        values[SEASONAL_PERIOD:] - values[:-SEASONAL_PERIOD]
+    )
+    scale = float(np.mean(seasonal_errors))
+
+    if scale == 0:
+        return np.nan
+
+    return scale

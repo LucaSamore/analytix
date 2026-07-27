@@ -22,7 +22,26 @@ WAVELET_MODEL = "Wavelet+AutoReg"
 COMPARISON_MODELS = ["SARIMA", "XGBoost"]
 
 
-def rolling_forecasts(
+def run_dm_for_series(
+    dataset: str,
+    series_name: str,
+    category: str,
+    series: pd.Series,
+) -> list[dict[str, Any]]:
+    """Run the complete DM experiment for one series."""
+
+    actual, forecasts = _rolling_forecasts(series)
+
+    return _compare_wavelet_with_models(
+        dataset,
+        series_name,
+        category,
+        actual,
+        forecasts,
+    )
+
+
+def _rolling_forecasts(
     series: pd.Series,
 ) -> tuple[np.ndarray, dict[str, list[float]]]:
     """Generate 24 one-step forecasts from equal rolling origins."""
@@ -62,7 +81,7 @@ def rolling_forecasts(
     return np.asarray(actual_values, dtype=float), forecasts
 
 
-def compare_wavelet_with_models(
+def _compare_wavelet_with_models(
     dataset: str,
     series_name: str,
     category: str,
@@ -125,22 +144,3 @@ def compare_wavelet_with_models(
         })
 
     return rows
-
-
-def run_dm_for_series(
-    dataset: str,
-    series_name: str,
-    category: str,
-    series: pd.Series,
-) -> list[dict[str, Any]]:
-    """Run the complete DM experiment for one series."""
-
-    actual, forecasts = rolling_forecasts(series)
-
-    return compare_wavelet_with_models(
-        dataset,
-        series_name,
-        category,
-        actual,
-        forecasts,
-    )

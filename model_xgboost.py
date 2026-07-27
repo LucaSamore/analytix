@@ -39,7 +39,115 @@ XGBOOST_CONFIGURATIONS: list[XGBoostConfiguration] = [
 ]
 
 
-def create_lagged_dataset(
+def run_xgboost(
+    series: pd.Series,
+    look_back: int = 12,
+) -> dict[str, Any]:
+    """Select XGBoost on validation and evaluate it on the final test."""
+
+    train, validation, test = split_series(series)
+    configuration = _select_xgboost_configuration(
+        train,
+        validation,
+        look_back,
+    )
+
+    history = combine_history(train, validation)
+    model = _fit_xgboost(history, configuration, look_back)
+    forecast = _recursive_forecast(
+        model,
+        history,
+        FORECAST_HORIZON,
+        look_back,
+    )
+    actual = test.to_numpy(dtype=float)
+
+    return {
+        "forecast": forecast,
+        "metrics": compute_metrics(actual, forecast, history),
+        "configuration": str(configuration["name"]),
+    }
+
+
+def select_xgboost_configuration_from_history(
+    history: pd.Series,
+    look_back: int = 12,
+) -> XGBoostConfiguration:
+    """Select XGBoost using an internal validation at the end of a history."""
+
+    if len(history) <= VALIDATION_HORIZON + look_back:
+        raise ValueError("Not enough history to validate XGBoost.")
+
+    train = history.iloc[:-VALIDATION_HORIZON].reset_index(drop=True)
+    validation = history.iloc[-VALIDATION_HORIZON:].reset_index(drop=True)
+    configuration = _select_xgboost_configuration(
+        train,
+        validation,
+        look_back,
+    )
+
+    return configuration
+
+
+def forecast_xgboost_one_step(
+    history: pd.Series,
+    configuration: XGBoostConfiguration,
+    look_back: int = 12,
+) -> float:
+    """Produce one forecast for the rolling Diebold-Mariano experiment."""
+
+    model = _fit_xgboost(history, configuration, look_back)
+    forecast = _recursive_forecast(model, history, 1, look_back)
+
+    return float(forecast[0])
+
+
+def _select_xgboost_configuration(
+    train: pd.Series,
+    validation: pd.Series,
+    look_back: int = 12,
+) -> XGBoostConfiguration:
+    """Choose the configuration with the lowest validation MASE."""
+
+    best_configuration = XGBOOST_CONFIGURATIONS[0]
+    best_mase = np.inf
+
+    for configuration in XGBOOST_CONFIGURATIONS:
+        model = _fit_xgboost(train, configuration, look_back)
+        forecast = _recursive_forecast(
+            model,
+            train,
+            len(validation),
+            look_back,
+        )
+        metrics = compute_metrics(
+            validation.to_numpy(dtype=float),
+            forecast,
+            train,
+        )
+
+        if metrics["mase"] < best_mase:
+            best_mase = metrics["mase"]
+            best_configuration = configuration
+
+    return best_configuration.copy()
+
+
+def _fit_xgboost(
+    history: pd.Series,
+    configuration: XGBoostConfiguration,
+    look_back: int = 12,
+) -> XGBRegressor:
+    """Fit XGBoost on the lagged rows available in the history."""
+
+    features, targets = _create_lagged_dataset(history, look_back)
+    model = _make_xgboost_model(configuration)
+    model.fit(features, targets)
+
+    return model
+
+
+def _create_lagged_dataset(
     values: pd.Series,
     look_back: int = 12,
 ) -> tuple[np.ndarray, np.ndarray]:
@@ -62,7 +170,7 @@ def create_lagged_dataset(
     )
 
 
-def make_xgboost_model(
+def _make_xgboost_model(
     configuration: XGBoostConfiguration,
 ) -> XGBRegressor:
     """Create one reproducible XGBoost model."""
@@ -78,21 +186,7 @@ def make_xgboost_model(
     )
 
 
-def fit_xgboost(
-    history: pd.Series,
-    configuration: XGBoostConfiguration,
-    look_back: int = 12,
-) -> XGBRegressor:
-    """Fit XGBoost on the lagged rows available in the history."""
-
-    features, targets = create_lagged_dataset(history, look_back)
-    model = make_xgboost_model(configuration)
-    model.fit(features, targets)
-
-    return model
-
-
-def recursive_forecast(
+def _recursive_forecast(
     model: XGBRegressor,
     history: pd.Series,
     horizon: int,
@@ -116,96 +210,3 @@ def recursive_forecast(
 
     return np.asarray(forecast, dtype=float)
 
-
-def select_xgboost_configuration(
-    train: pd.Series,
-    validation: pd.Series,
-    look_back: int = 12,
-) -> XGBoostConfiguration:
-    """Choose the configuration with the lowest validation MASE."""
-
-    best_configuration = XGBOOST_CONFIGURATIONS[0]
-    best_mase = np.inf
-
-    for configuration in XGBOOST_CONFIGURATIONS:
-        model = fit_xgboost(train, configuration, look_back)
-        forecast = recursive_forecast(
-            model,
-            train,
-            len(validation),
-            look_back,
-        )
-        metrics = compute_metrics(
-            validation.to_numpy(dtype=float),
-            forecast,
-            train,
-        )
-
-        if metrics["mase"] < best_mase:
-            best_mase = metrics["mase"]
-            best_configuration = configuration
-
-    return best_configuration.copy()
-
-
-def select_xgboost_configuration_from_history(
-    history: pd.Series,
-    look_back: int = 12,
-) -> XGBoostConfiguration:
-    """Select XGBoost using an internal validation at the end of a history."""
-
-    if len(history) <= VALIDATION_HORIZON + look_back:
-        raise ValueError("Not enough history to validate XGBoost.")
-
-    train = history.iloc[:-VALIDATION_HORIZON].reset_index(drop=True)
-    validation = history.iloc[-VALIDATION_HORIZON:].reset_index(drop=True)
-    configuration = select_xgboost_configuration(
-        train,
-        validation,
-        look_back,
-    )
-
-    return configuration
-
-
-def forecast_xgboost_one_step(
-    history: pd.Series,
-    configuration: XGBoostConfiguration,
-    look_back: int = 12,
-) -> float:
-    """Produce one forecast for the rolling Diebold-Mariano experiment."""
-
-    model = fit_xgboost(history, configuration, look_back)
-    forecast = recursive_forecast(model, history, 1, look_back)
-
-    return float(forecast[0])
-
-
-def run_xgboost(
-    series: pd.Series,
-    look_back: int = 12,
-) -> dict[str, Any]:
-    """Select XGBoost on validation and evaluate it on the final test."""
-
-    train, validation, test = split_series(series)
-    configuration = select_xgboost_configuration(
-        train,
-        validation,
-        look_back,
-    )
-
-    history = combine_history(train, validation)
-    model = fit_xgboost(history, configuration, look_back)
-    forecast = recursive_forecast(
-        model,
-        history,
-        FORECAST_HORIZON,
-        look_back,
-    )
-    actual = test.to_numpy(dtype=float)
-
-    return {
-        "forecast": forecast,
-        "metrics": compute_metrics(actual, forecast, history),
-        "configuration": str(configuration["name"]),
-    }

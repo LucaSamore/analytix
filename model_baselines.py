@@ -15,20 +15,6 @@ from data_utils import (
 )
 
 
-def autoreg_forecast(
-    history: pd.Series,
-    horizon: int,
-    lag: int = 12,
-) -> np.ndarray:
-    """Fit AutoReg to the original series and forecast future values."""
-
-    model = AutoReg(history.to_numpy(dtype=float), lags=lag, old_names=False)
-    fitted_model = model.fit()
-    forecast = fitted_model.forecast(steps=horizon)
-
-    return np.asarray(forecast, dtype=float)
-
-
 def run_seasonal_naive(series: pd.Series) -> dict[str, Any]:
     """Forecast the test set with the previous year's observations."""
 
@@ -54,7 +40,7 @@ def run_autoreg(
     train, validation, test = split_series(series)
     history = combine_history(train, validation)
 
-    forecast = autoreg_forecast(history, FORECAST_HORIZON, lag)
+    forecast = _autoreg_forecast(history, FORECAST_HORIZON, lag)
     actual = test.to_numpy(dtype=float)
 
     return {
@@ -62,3 +48,17 @@ def run_autoreg(
         "metrics": compute_metrics(actual, forecast, history),
         "configuration": f"lag = {lag}",
     }
+
+
+def _autoreg_forecast(
+    history: pd.Series,
+    horizon: int,
+    lag: int = 12,
+) -> np.ndarray:
+    """Fit AutoReg to the original series and forecast future values."""
+
+    model = AutoReg(history.to_numpy(dtype=float), lags=lag, old_names=False)
+    fitted_model = model.fit()
+    forecast = fitted_model.forecast(steps=horizon)
+
+    return np.asarray(forecast, dtype=float)

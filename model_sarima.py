@@ -23,7 +23,40 @@ SarimaStructure = tuple[
 ]
 
 
-def fit_auto_sarima(history: pd.Series) -> ARIMA:
+def run_sarima(series: pd.Series) -> dict[str, Any]:
+    """Fit SARIMA on pre-test observations and forecast the final year."""
+
+    train, validation, test = split_series(series)
+    history = combine_history(train, validation)
+
+    model = _fit_auto_sarima(history)
+    forecast = model.predict(n_periods=FORECAST_HORIZON)
+
+    actual = test.to_numpy(dtype=float)
+    forecast = np.asarray(forecast, dtype=float)
+
+    configuration = (
+        f"order={model.order}, "
+        f"seasonal_order={model.seasonal_order}"
+    )
+
+    return {
+        "forecast": forecast,
+        "metrics": compute_metrics(actual, forecast, history),
+        "fitted_model": model,
+        "configuration": configuration,
+    }
+
+
+def select_sarima_structure(history: pd.Series) -> SarimaStructure:
+    """Select the SARIMA orders once before a rolling experiment."""
+
+    model = _fit_auto_sarima(history)
+
+    return model.order, model.seasonal_order, bool(model.with_intercept)
+
+
+def _fit_auto_sarima(history: pd.Series) -> ARIMA:
     """Select and fit SARIMA using only observations available at that time."""
 
     return pm.auto_arima(
@@ -47,15 +80,17 @@ def fit_auto_sarima(history: pd.Series) -> ARIMA:
     )
 
 
-def select_sarima_structure(history: pd.Series) -> SarimaStructure:
-    """Select the SARIMA orders once before a rolling experiment."""
+def forecast_sarima_one_step(
+    history: pd.Series,
+    structure: SarimaStructure,
+) -> float:
+    """Produce one forecast for the rolling Diebold-Mariano experiment."""
 
-    model = fit_auto_sarima(history)
+    forecast = _sarima_forecast_with_structure(history, 1, structure)
+    return float(forecast[0])
 
-    return model.order, model.seasonal_order, bool(model.with_intercept)
 
-
-def sarima_forecast_with_structure(
+def _sarima_forecast_with_structure(
     history: pd.Series,
     horizon: int,
     structure: SarimaStructure,
@@ -74,38 +109,3 @@ def sarima_forecast_with_structure(
     forecast = fitted_model.predict(n_periods=horizon)
 
     return np.asarray(forecast, dtype=float)
-
-
-def forecast_sarima_one_step(
-    history: pd.Series,
-    structure: SarimaStructure,
-) -> float:
-    """Produce one forecast for the rolling Diebold-Mariano experiment."""
-
-    forecast = sarima_forecast_with_structure(history, 1, structure)
-    return float(forecast[0])
-
-
-def run_sarima(series: pd.Series) -> dict[str, Any]:
-    """Fit SARIMA on pre-test observations and forecast the final year."""
-
-    train, validation, test = split_series(series)
-    history = combine_history(train, validation)
-
-    model = fit_auto_sarima(history)
-    forecast = model.predict(n_periods=FORECAST_HORIZON)
-
-    actual = test.to_numpy(dtype=float)
-    forecast = np.asarray(forecast, dtype=float)
-
-    configuration = (
-        f"order={model.order}, "
-        f"seasonal_order={model.seasonal_order}"
-    )
-
-    return {
-        "forecast": forecast,
-        "metrics": compute_metrics(actual, forecast, history),
-        "fitted_model": model,
-        "configuration": configuration,
-    }

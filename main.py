@@ -19,7 +19,7 @@ from model_xgboost import run_xgboost
 OUTPUT_DIR = Path(__file__).resolve().parent / "results"
 
 
-def run_all_models(
+def _run_all_models(
     series: pd.Series,
 ) -> dict[str, dict[str, Any]]:
     """Run the two references and the three requested models."""
@@ -33,7 +33,7 @@ def run_all_models(
     }
 
 
-def print_metrics(model_name: str, result: dict[str, Any]) -> None:
+def _print_metrics(model_name: str, result: dict[str, Any]) -> None:
     """Print one model's final-test metrics."""
 
     metrics = result["metrics"]
@@ -47,7 +47,7 @@ def print_metrics(model_name: str, result: dict[str, Any]) -> None:
     print(f"  Configuration: {result['configuration']}")
 
 
-def run_demo(dataset: str, series_id: str) -> None:
+def _run_demo(dataset: str, series_id: str) -> None:
     """Run and plot every model for one selected series."""
 
     series, metadata = data_utils.load_series(dataset, series_id)
@@ -63,10 +63,10 @@ def run_demo(dataset: str, series_id: str) -> None:
         f"test={len(test)}"
     )
 
-    results = run_all_models(series)
+    results = _run_all_models(series)
 
     for model_name, result in results.items():
-        print_metrics(model_name, result)
+        _print_metrics(model_name, result)
 
     plotting.plot_series(series, series_name)
     plotting.plot_wavelet_components(
@@ -78,7 +78,7 @@ def run_demo(dataset: str, series_id: str) -> None:
     plotting.plot_sarima_diagnostics(results["SARIMA"])
 
 
-def print_batch_summary(metrics: pd.DataFrame) -> None:
+def _print_batch_summary(metrics: pd.DataFrame) -> None:
     """Summarise the scale-free metrics across all series."""
 
     print("\nAverage scale-free metrics across the 15 series:")
@@ -103,7 +103,7 @@ def print_batch_summary(metrics: pd.DataFrame) -> None:
     )
 
 
-def run_batch(run_dm: bool = False) -> None:
+def _run_batch(run_dm: bool = False) -> None:
     """Run every selected series and save the result tables."""
 
     OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
@@ -120,10 +120,10 @@ def run_batch(run_dm: bool = False) -> None:
             f"({category}, {len(series)} observations) ==="
         )
 
-        results = run_all_models(series)
+        results = _run_all_models(series)
 
         for model_name, result in results.items():
-            print_metrics(model_name, result)
+            _print_metrics(model_name, result)
 
             row = {
                 "dataset": dataset,
@@ -154,7 +154,7 @@ def run_batch(run_dm: bool = False) -> None:
     metrics.to_csv(metrics_path, index=False)
 
     print(f"\nSaved metrics to {metrics_path}")
-    print_batch_summary(metrics)
+    _print_batch_summary(metrics)
 
     if run_dm:
         dm_results = pd.DataFrame(dm_rows)
@@ -198,9 +198,9 @@ def main() -> None:
     args = parser.parse_args()
 
     if args.mode == "demo":
-        run_demo(args.dataset, args.series)
+        _run_demo(args.dataset, args.series)
     else:
-        run_batch(run_dm=args.run_dm)
+        _run_batch(run_dm=args.run_dm)
 
 
 if __name__ == "__main__":
