@@ -91,6 +91,29 @@ def plot_sarima_diagnostics(result: dict[str, Any]) -> None:
     """Show the standard residual diagnostics of the selected SARIMA."""
 
     fitted_model = result["fitted_model"]
-    fitted_model.plot_diagnostics(figsize=(12, 8))
-    plt.tight_layout()
+    figure = fitted_model.plot_diagnostics(figsize=(12, 8))
+    residual_axis, density_axis, qq_axis, acf_axis = figure.axes
+
+    figure.suptitle("Diagnostica dei residui SARIMA - Dati precedenti al test")
+
+    residual_axis.set_title("Residui standardizzati nel tempo")
+    residual_axis.set_xlabel("Osservazione storica (ordine temporale)")
+    residual_axis.set_ylabel("Residuo standardizzato")
+
+    density_axis.set_title("Istogramma e densità stimata")
+    density_axis.set_xlabel("Residuo standardizzato")
+    density_axis.set_ylabel("Densità")
+    density_axis.legend(
+        ["Istogramma", "Densità stimata (KDE)", "Normale N(0,1)"]
+    )
+
+    qq_axis.set_title("Q-Q rispetto alla distribuzione normale")
+    qq_axis.set_xlabel("Quantili teorici della distribuzione normale")
+    qq_axis.set_ylabel("Quantili osservati dei residui")
+
+    acf_axis.set_title("Correlogramma dei residui")
+    acf_axis.set_xlabel("Ritardo temporale (mesi)")
+    acf_axis.set_ylabel("Autocorrelazione dei residui")
+
+    figure.tight_layout(rect=(0, 0, 1, 0.96))
     plt.show()
